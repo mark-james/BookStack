@@ -4,10 +4,8 @@ use Illuminate\Contracts\Cache\Repository as Cache;
 
 /**
  * Class SettingService
- *
  * The settings are a simple key-value database store.
- *
- * @package BookStack\Services
+ * For non-authenticated users, user settings are stored via the session instead.
  */
 class SettingService
 {
@@ -41,6 +39,7 @@ class SettingService
         if ($default === false) {
             $default = config('setting-defaults.' . $key, false);
         }
+
         if (isset($this->localCache[$key])) {
             return $this->localCache[$key];
         }
@@ -48,6 +47,19 @@ class SettingService
         $value = $this->getValueFromStore($key, $default);
         $formatted = $this->formatValue($value, $default);
         $this->localCache[$key] = $formatted;
+        return $formatted;
+    }
+
+    /**
+     * Get a value from the session instead of the main store option.
+     * @param $key
+     * @param bool $default
+     * @return mixed
+     */
+    protected function getFromSession($key, $default = false)
+    {
+        $value = session()->get($key, $default);
+        $formatted = $this->formatValue($value, $default);
         return $formatted;
     }
 
@@ -60,7 +72,21 @@ class SettingService
      */
     public function getUser($user, $key, $default = false)
     {
+        if ($user->isDefault()) {
+            return $this->getFromSession($key, $default);
+        }
         return $this->get($this->userKey($user->id, $key), $default);
+    }
+
+    /**
+     * Get a value for the current logged-in user.
+     * @param $key
+     * @param bool $default
+     * @return bool|string
+     */
+    public function getForCurrentUser($key, $default = false)
+    {
+        return $this->getUser(user(), $key, $default);
     }
 
     /**
@@ -72,12 +98,6 @@ class SettingService
      */
     protected function getValueFromStore($key, $default)
     {
-        // Check for an overriding value
-        $overrideValue = $this->getOverrideValue($key);
-        if ($overrideValue !== null) {
-            return $overrideValue;
-        }
-
         // Check the cache
         $cacheKey = $this->cachePrefix . $key;
         $cacheVal = $this->cache->get($cacheKey, null);
@@ -179,6 +199,9 @@ class SettingService
      */
     public function putUser($user, $key, $value)
     {
+        if ($user->isDefault()) {
+            return session()->put($key, $value);
+        }
         return $this->put($this->userKey($user->id, $key), $value);
     }
 
@@ -225,21 +248,5 @@ class SettingService
     protected function getSettingObjectByKey($key)
     {
         return $this->setting->where('setting_key', '=', $key)->first();
-    }
-
-
-    /**
-     * Returns an override value for a setting based on certain app conditions.
-     * Used where certain configuration options overrule others.
-     * Returns null if no override value is available.
-     * @param $key
-     * @return bool|null
-     */
-    protected function getOverrideValue($key)
-    {
-        if ($key === 'registration-enabled' && config('auth.method') === 'ldap') {
-            return false;
-        }
-        return null;
     }
 }

@@ -1,26 +1,31 @@
 @extends('simple-layout')
 
-@section('toolbar')
-    @include('settings/navbar', ['selected' => 'users'])
-@stop
-
 @section('body')
 
     <div class="container small">
-        <p>&nbsp;</p>
-        <div class="card">
-            <h3>@icon('users-add') {{ trans('settings.users_add_new') }}</h3>
-            <div class="body">
-                <form action="{{ baseUrl("/settings/users/create") }}" method="post">
-                    {!! csrf_field() !!}
-                    @include('users/forms/' . $authMethod)
-                    <div class="form-group text-right">
-                        <a href="{{  baseUrl($currentUser->can('users-manage') ? "/settings/users" : "/") }}" class="button outline">{{ trans('common.cancel') }}</a>
-                        <button class="button pos" type="submit">{{ trans('common.save') }}</button>
-                    </div>
-                </form>
-            </div>
+
+        <div class="py-m">
+            @include('settings.navbar', ['selected' => 'users'])
         </div>
+
+        <main class="card content-wrap">
+            <h1 class="list-heading">{{ trans('settings.users_add_new') }}</h1>
+
+            <form action="{{ url("/settings/users/create") }}" method="post">
+                {!! csrf_field() !!}
+
+                <div class="setting-list">
+                    @include('users.form')
+                </div>
+
+                <div class="form-group text-right">
+                    <a href="{{  url($currentUser->can('users-manage') ? "/settings/users" : "/") }}" class="button outline">{{ trans('common.cancel') }}</a>
+                    <button class="button" type="submit">{{ trans('common.save') }}</button>
+                </div>
+
+            </form>
+
+        </main>
     </div>
 
 @stop

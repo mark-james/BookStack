@@ -1,27 +1,34 @@
 <?php namespace BookStack\Actions;
 
 use BookStack\Auth\Permissions\PermissionService;
+use BookStack\Entities\Book;
 use BookStack\Entities\Entity;
+use BookStack\Entities\EntityProvider;
+use DB;
+use Illuminate\Support\Collection;
 
 class ViewService
 {
     protected $view;
     protected $permissionService;
+    protected $entityProvider;
 
     /**
      * ViewService constructor.
-     * @param \BookStack\Actions\View $view
-     * @param \BookStack\Auth\Permissions\PermissionService $permissionService
+     * @param View $view
+     * @param PermissionService $permissionService
+     * @param EntityProvider $entityProvider
      */
-    public function __construct(View $view, PermissionService $permissionService)
+    public function __construct(View $view, PermissionService $permissionService, EntityProvider $entityProvider)
     {
         $this->view = $view;
         $this->permissionService = $permissionService;
+        $this->entityProvider = $entityProvider;
     }
 
     /**
      * Add a view to the given entity.
-     * @param Entity $entity
+     * @param \BookStack\Entities\Entity $entity
      * @return int
      */
     public function add(Entity $entity)
@@ -38,7 +45,7 @@ class ViewService
         }
 
         // Otherwise create new view count
-        $entity->views()->save($this->view->create([
+        $entity->views()->save($this->view->newInstance([
             'user_id' => $user->id,
             'views' => 1
         ]));
@@ -50,23 +57,21 @@ class ViewService
      * Get the entities with the most views.
      * @param int $count
      * @param int $page
-     * @param Entity|false|array $filterModel
+     * @param string|array $filterModels
      * @param string $action - used for permission checking
-     * @return
+     * @return Collection
      */
-    public function getPopular($count = 10, $page = 0, $filterModel = false, $action = 'view')
+    public function getPopular(int $count = 10, int $page = 0, array $filterModels = null, string $action = 'view')
     {
-        // TODO - Standardise input filter
         $skipCount = $count * $page;
-        $query = $this->permissionService->filterRestrictedEntityRelations($this->view, 'views', 'viewable_id', 'viewable_type', $action)
-            ->select('*', 'viewable_id', 'viewable_type', \DB::raw('SUM(views) as view_count'))
+        $query = $this->permissionService
+            ->filterRestrictedEntityRelations($this->view, 'views', 'viewable_id', 'viewable_type', $action)
+            ->select('*', 'viewable_id', 'viewable_type', DB::raw('SUM(views) as view_count'))
             ->groupBy('viewable_id', 'viewable_type')
             ->orderBy('view_count', 'desc');
 
-        if ($filterModel && is_array($filterModel)) {
-            $query->whereIn('viewable_type', $filterModel);
-        } else if ($filterModel) {
-            $query->where('viewable_type', '=', $filterModel->getMorphClass());
+        if ($filterModels) {
+            $query->whereIn('viewable_type', $this->entityProvider->getMorphClasses($filterModels));
         }
 
         return $query->with('viewable')->skip($skipCount)->take($count)->get()->pluck('viewable');

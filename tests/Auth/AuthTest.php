@@ -1,7 +1,8 @@
 <?php namespace Tests;
 
-use BookStack\Notifications\ConfirmEmail;
 use BookStack\Auth\User;
+use BookStack\Entities\Page;
+use BookStack\Notifications\ConfirmEmail;
 use BookStack\Settings\SettingService;
 use Illuminate\Support\Facades\Notification;
 
@@ -69,6 +70,31 @@ class AuthTest extends BrowserKitTest
             ->seePageIs('/register');
     }
 
+    public function test_registration_validation()
+    {
+        $this->setSettings(['registration-enabled' => 'true']);
+
+        $this->visit('/register')
+            ->type('1', '#name')
+            ->type('1', '#email')
+            ->type('1', '#password')
+            ->press('Create Account')
+            ->see('The name must be at least 2 characters.')
+            ->see('The email must be a valid email address.')
+            ->see('The password must be at least 8 characters.')
+            ->seePageIs('/register');
+    }
+
+    public function test_sign_up_link_on_login()
+    {
+        $this->visit('/login')
+            ->dontSee('Sign up');
+
+        $this->setSettings(['registration-enabled' => 'true']);
+
+        $this->visit('/login')
+            ->see('Sign up');
+    }
 
     public function test_confirmed_registration()
     {
@@ -250,6 +276,15 @@ class AuthTest extends BrowserKitTest
     public function test_user_cannot_be_deleted_if_last_admin()
     {
         $adminRole = \BookStack\Auth\Role::getRole('admin');
+
+        // Delete all but one admin user if there are more than one
+        $adminUsers = $adminRole->users;
+        if (count($adminUsers) > 1) {
+            foreach ($adminUsers->splice(1) as $user) {
+                $user->delete();
+            }
+        }
+
         // Ensure we currently only have 1 admin user
         $this->assertEquals(1, $adminRole->users()->count());
         $user = $adminRole->users->first();
@@ -307,6 +342,17 @@ class AuthTest extends BrowserKitTest
         $this->visit('/password/email')
             ->seeLink('Log in')
             ->seeLink('Sign up');
+    }
+
+    public function test_login_redirects_to_initially_requested_url_correctly()
+    {
+        config()->set('app.url', 'http://localhost');
+        $page = Page::query()->first();
+
+        $this->visit($page->getUrl())
+            ->seePageUrlIs(url('/login'));
+        $this->login('admin@admin.com', 'password')
+            ->seePageUrlIs($page->getUrl());
     }
 
     /**

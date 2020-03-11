@@ -26,7 +26,7 @@ class PermissionController extends Controller
     {
         $this->checkPermission('user-roles-manage');
         $roles = $this->permissionsRepo->getAllRoles();
-        return view('settings/roles/index', ['roles' => $roles]);
+        return view('settings.roles.index', ['roles' => $roles]);
     }
 
     /**
@@ -36,7 +36,7 @@ class PermissionController extends Controller
     public function createRole()
     {
         $this->checkPermission('user-roles-manage');
-        return view('settings/roles/create');
+        return view('settings.roles.create');
     }
 
     /**
@@ -53,7 +53,7 @@ class PermissionController extends Controller
         ]);
 
         $this->permissionsRepo->saveNewRole($request->all());
-        session()->flash('success', trans('settings.role_create_success'));
+        $this->showSuccessNotification(trans('settings.role_create_success'));
         return redirect('/settings/roles');
     }
 
@@ -70,17 +70,18 @@ class PermissionController extends Controller
         if ($role->hidden) {
             throw new PermissionsException(trans('errors.role_cannot_be_edited'));
         }
-        return view('settings/roles/edit', ['role' => $role]);
+        return view('settings.roles.edit', ['role' => $role]);
     }
 
     /**
      * Updates a user role.
-     * @param $id
      * @param Request $request
+     * @param $id
      * @return \Illuminate\Http\RedirectResponse|\Illuminate\Routing\Redirector
      * @throws PermissionsException
+     * @throws \Illuminate\Validation\ValidationException
      */
-    public function updateRole($id, Request $request)
+    public function updateRole(Request $request, $id)
     {
         $this->checkPermission('user-roles-manage');
         $this->validate($request, [
@@ -89,7 +90,7 @@ class PermissionController extends Controller
         ]);
 
         $this->permissionsRepo->updateRole($id, $request->all());
-        session()->flash('success', trans('settings.role_update_success'));
+        $this->showSuccessNotification(trans('settings.role_update_success'));
         return redirect('/settings/roles');
     }
 
@@ -106,28 +107,28 @@ class PermissionController extends Controller
         $roles = $this->permissionsRepo->getAllRolesExcept($role);
         $blankRole = $role->newInstance(['display_name' => trans('settings.role_delete_no_migration')]);
         $roles->prepend($blankRole);
-        return view('settings/roles/delete', ['role' => $role, 'roles' => $roles]);
+        return view('settings.roles.delete', ['role' => $role, 'roles' => $roles]);
     }
 
     /**
      * Delete a role from the system,
      * Migrate from a previous role if set.
-     * @param $id
      * @param Request $request
+     * @param $id
      * @return \Illuminate\Http\RedirectResponse|\Illuminate\Routing\Redirector
      */
-    public function deleteRole($id, Request $request)
+    public function deleteRole(Request $request, $id)
     {
         $this->checkPermission('user-roles-manage');
 
         try {
             $this->permissionsRepo->deleteRole($id, $request->get('migrate_role_id'));
         } catch (PermissionsException $e) {
-            session()->flash('error', $e->getMessage());
+            $this->showErrorNotification($e->getMessage());
             return redirect()->back();
         }
 
-        session()->flash('success', trans('settings.role_delete_success'));
+        $this->showSuccessNotification(trans('settings.role_delete_success'));
         return redirect('/settings/roles');
     }
 }

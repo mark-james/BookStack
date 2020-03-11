@@ -190,10 +190,10 @@ class PermissionService
     {
         return $this->entityProvider->book->newQuery()
             ->select(['id', 'restricted', 'created_by'])->with(['chapters' => function ($query) {
-            $query->select(['id', 'restricted', 'created_by', 'book_id']);
-        }, 'pages'  => function ($query) {
-            $query->select(['id', 'restricted', 'created_by', 'book_id', 'chapter_id']);
-        }]);
+                $query->select(['id', 'restricted', 'created_by', 'book_id']);
+            }, 'pages'  => function ($query) {
+                $query->select(['id', 'restricted', 'created_by', 'book_id', 'chapter_id']);
+            }]);
     }
 
     /**
@@ -215,7 +215,6 @@ class PermissionService
      * @param Collection $books
      * @param array $roles
      * @param bool $deleteOld
-     * @throws \Throwable
      */
     protected function buildJointPermissionsForBooks($books, $roles, $deleteOld = false)
     {
@@ -557,6 +556,39 @@ class PermissionService
     }
 
     /**
+     * Checks if a user has the given permission for any items in the system.
+     * Can be passed an entity instance to filter on a specific type.
+     * @param string $permission
+     * @param string $entityClass
+     * @return bool
+     */
+    public function checkUserHasPermissionOnAnything(string $permission, string $entityClass = null)
+    {
+        $userRoleIds = $this->currentUser()->roles()->select('id')->pluck('id')->toArray();
+        $userId = $this->currentUser()->id;
+
+        $permissionQuery = $this->db->table('joint_permissions')
+            ->where('action', '=', $permission)
+            ->whereIn('role_id', $userRoleIds)
+            ->where(function ($query) use ($userId) {
+                $query->where('has_permission', '=', 1)
+                    ->orWhere(function ($query2) use ($userId) {
+                        $query2->where('has_permission_own', '=', 1)
+                            ->where('created_by', '=', $userId);
+                    });
+            });
+
+        if (!is_null($entityClass)) {
+            $entityInstance = app()->make($entityClass);
+            $permissionQuery = $permissionQuery->where('entity_type', '=', $entityInstance->getMorphClass());
+        }
+
+        $hasPermission = $permissionQuery->count() > 0;
+        $this->clean();
+        return $hasPermission;
+    }
+
+    /**
      * Check if an entity has restrictions set on itself or its
      * parent tree.
      * @param \BookStack\Entities\Entity $entity
@@ -601,42 +633,40 @@ class PermissionService
     }
 
     /**
-     * Get the children of a book in an efficient single query, Filtered by the permission system.
-     * @param integer $book_id
-     * @param bool $filterDrafts
-     * @param bool $fetchPageContent
-     * @return QueryBuilder
+     * Limited the given entity query so that the query will only
+     * return items that the user has permission for the given ability.
      */
-    public function bookChildrenQuery($book_id, $filterDrafts = false, $fetchPageContent = false)
+    public function restrictEntityQuery(Builder $query, string $ability = 'view'): Builder
     {
-        $entities = $this->entityProvider;
-        $pageSelect = $this->db->table('pages')->selectRaw($entities->page->entityRawQuery($fetchPageContent))
-            ->where('book_id', '=', $book_id)->where(function ($query) use ($filterDrafts) {
-            $query->where('draft', '=', 0);
-            if (!$filterDrafts) {
-                $query->orWhere(function ($query) {
-                    $query->where('draft', '=', 1)->where('created_by', '=', $this->currentUser()->id);
-                });
-            }
-        });
-        $chapterSelect = $this->db->table('chapters')->selectRaw($entities->chapter->entityRawQuery())->where('book_id', '=', $book_id);
-        $query = $this->db->query()->select('*')->from($this->db->raw("({$pageSelect->toSql()} UNION {$chapterSelect->toSql()}) AS U"))
-            ->mergeBindings($pageSelect)->mergeBindings($chapterSelect);
-
-        // Add joint permission filter
-        $whereQuery = $this->db->table('joint_permissions as jp')->selectRaw('COUNT(*)')
-            ->whereRaw('jp.entity_id=U.id')->whereRaw('jp.entity_type=U.entity_type')
-            ->where('jp.action', '=', 'view')->whereIn('jp.role_id', $this->getRoles())
-            ->where(function ($query) {
-                $query->where('jp.has_permission', '=', 1)->orWhere(function ($query) {
-                    $query->where('jp.has_permission_own', '=', 1)->where('jp.created_by', '=', $this->currentUser()->id);
-                });
-            });
-        $query->whereRaw("({$whereQuery->toSql()}) > 0")->mergeBindings($whereQuery);
-
-        $query->orderBy('draft', 'desc')->orderBy('priority', 'asc');
         $this->clean();
-        return  $query;
+        return $query->where(function (Builder $parentQuery) use ($ability) {
+            $parentQuery->whereHas('jointPermissions', function (Builder $permissionQuery) use ($ability) {
+                $permissionQuery->whereIn('role_id', $this->getRoles())
+                    ->where('action', '=', $ability)
+                    ->where(function (Builder $query) {
+                        $query->where('has_permission', '=', true)
+                            ->orWhere(function (Builder $query) {
+                                $query->where('has_permission_own', '=', true)
+                                    ->where('created_by', '=', $this->currentUser()->id);
+                            });
+                    });
+            });
+        });
+    }
+
+    /**
+     * Extend the given page query to ensure draft items are not visible
+     * unless created by the given user.
+     */
+    public function enforceDraftVisiblityOnQuery(Builder $query): Builder
+    {
+        return $query->where(function (Builder $query) {
+            $query->where('draft', '=', false)
+                ->orWhere(function (Builder $query) {
+                    $query->where('draft', '=', true)
+                        ->where('created_by', '=', $this->currentUser()->id);
+                });
+        });
     }
 
     /**
@@ -651,12 +681,11 @@ class PermissionService
         if (strtolower($entityType) === 'page') {
             // Prevent drafts being visible to others.
             $query = $query->where(function ($query) {
-                $query->where('draft', '=', false);
-                if ($this->currentUser()) {
-                    $query->orWhere(function ($query) {
-                        $query->where('draft', '=', true)->where('created_by', '=', $this->currentUser()->id);
+                $query->where('draft', '=', false)
+                    ->orWhere(function ($query) {
+                        $query->where('draft', '=', true)
+                            ->where('created_by', '=', $this->currentUser()->id);
                     });
-                }
             });
         }
 
@@ -671,7 +700,7 @@ class PermissionService
      * @param string $entityIdColumn
      * @param string $entityTypeColumn
      * @param string $action
-     * @return mixed
+     * @return QueryBuilder
      */
     public function filterRestrictedEntityRelations($query, $tableName, $entityIdColumn, $entityTypeColumn, $action = 'view')
     {
@@ -699,18 +728,21 @@ class PermissionService
     }
 
     /**
-     * Filters pages that are a direct relation to another item.
+     * Add conditions to a query to filter the selection to related entities
+     * where permissions are granted.
+     * @param $entityType
      * @param $query
      * @param $tableName
      * @param $entityIdColumn
      * @return mixed
      */
-    public function filterRelatedPages($query, $tableName, $entityIdColumn)
+    public function filterRelatedEntity($entityType, $query, $tableName, $entityIdColumn)
     {
         $this->currentAction = 'view';
         $tableDetails = ['tableName' => $tableName, 'entityIdColumn' => $entityIdColumn];
 
-        $pageMorphClass = $this->entityProvider->page->getMorphClass();
+        $pageMorphClass = $this->entityProvider->get($entityType)->getMorphClass();
+
         $q = $query->where(function ($query) use ($tableDetails, $pageMorphClass) {
             $query->where(function ($query) use (&$tableDetails, $pageMorphClass) {
                 $query->whereExists(function ($permissionQuery) use (&$tableDetails, $pageMorphClass) {
@@ -728,7 +760,9 @@ class PermissionService
                 });
             })->orWhere($tableDetails['entityIdColumn'], '=', 0);
         });
+
         $this->clean();
+
         return $q;
     }
 
